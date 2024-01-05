@@ -157,6 +157,7 @@ def tag_file(file_path: str, image_path: str, track_info: TrackInfo, credits_lis
             tagger[key] = str(value).encode()
 
     # Need to change to merge duplicate credits automatically, or switch to plain dicts instead of list[dataclass]
+    #tagger.delete(credit.type)
     if credits_list:
         if container == ContainerEnum.m4a:
             for credit in credits_list:
@@ -192,16 +193,19 @@ def tag_file(file_path: str, image_path: str, track_info: TrackInfo, credits_lis
 
     # only embed the cover when embed_cover is set to True
     if image_path:
+        #print(image_path)
         with open(image_path, 'rb') as c:
             data = c.read()
         picture = Picture()
         picture.data = data
+        #print(picture.data)
 
         # Check if cover is smaller than 16MB
         if len(picture.data) < picture._MAX_SIZE:
             if container == ContainerEnum.flac:
                 picture.type = PictureType.COVER_FRONT
                 picture.mime = u'image/jpeg'
+                tagger.clear_pictures()
                 tagger.add_picture(picture)
             elif container == ContainerEnum.m4a:
                 tagger['covr'] = [MP4Cover(data, imageformat=MP4Cover.FORMAT_JPEG)]

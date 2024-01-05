@@ -189,7 +189,48 @@ class Downloader:
         return album_path
 
     def _download_album_files(self, album_path: str, album_info: AlbumInfo):
-        if album_info.cover_url:
+        covers_module_name = self.third_party_modules[ModuleModes.covers]
+        covers_module_name = covers_module_name if covers_module_name != self.service_name else None
+        if covers_module_name:
+            print()
+            self.print('Downloading artwork with ' + covers_module_name)
+            
+        if covers_module_name:
+            track_id=album_info.tracks[1]
+            quality_tier = QualityEnum[self.global_settings['general']['download_quality'].upper()]
+            codec_options = CodecOptions(
+                spatial_codecs = self.global_settings['codecs']['spatial_codecs'],
+                proprietary_codecs = self.global_settings['codecs']['proprietary_codecs'],
+            )
+            track_info: TrackInfo = self.service.get_track_info(track_id, quality_tier, codec_options, **album_info.track_extra_kwargs)
+            jpg_cover_options = CoverOptions(file_type=ImageFileTypeEnum.jpg, resolution=self.global_settings['covers']['main_resolution'], \
+                compression=CoverCompressionEnum[self.global_settings['covers']['main_compression'].lower()])
+            default_temp = download_to_temp(track_info.cover_url)
+            test_cover_options = CoverOptions(file_type=ImageFileTypeEnum.jpg, resolution=get_image_resolution(default_temp), compression=CoverCompressionEnum.high)
+            cover_module = self.loaded_modules[covers_module_name]
+            rms_threshold = self.global_settings['advanced']['cover_variance_threshold']
+
+            results: list[SearchResult] = self.search_by_tags(covers_module_name, track_info)
+            self.print('Covers to test: ' + str(len(results)))
+            attempted_urls = []
+            for i, r in enumerate(results, start=1):
+                test_cover_info: CoverInfo = cover_module.get_track_cover(r.result_id, test_cover_options, **r.extra_kwargs)
+                if test_cover_info.url not in attempted_urls:
+                    attempted_urls.append(test_cover_info.url)
+                    test_temp = download_to_temp(test_cover_info.url)
+                    rms = compare_images(default_temp, test_temp)
+                    silentremove(test_temp)
+                    self.print(f'Attempt {i} RMS: {rms!s}') # The smaller the root mean square, the closer the image is to the desired one
+                    if rms < rms_threshold:
+                        self.print('Match found below threshold ' + str(rms_threshold))
+                        jpg_cover_info: CoverInfo = cover_module.get_track_cover(r.result_id, jpg_cover_options, **r.extra_kwargs)
+                        download_file(jpg_cover_info.url, f'{album_path}cover.{album_info.cover_type.name}', artwork_settings=self._get_artwork_settings(covers_module_name))
+                        silentremove(default_temp)
+                        break
+            else:
+                self.print('Third-party module could not find cover, using fallback')
+                shutil.move(default_temp, f'{album_path}cover.{album_info.cover_type.name}')
+        elif album_info.cover_url:
             self.print('Downloading album cover')
             download_file(album_info.cover_url, f'{album_path}cover.{album_info.cover_type.name}', artwork_settings=self._get_artwork_settings())
 
@@ -230,7 +271,7 @@ class Downloader:
                 self.print('Downloading booklet')
                 download_file(album_info.booklet_url, album_path + 'Booklet.pdf')
             
-            cover_temp_location = download_to_temp(album_info.all_track_cover_jpg_url) if album_info.all_track_cover_jpg_url else ''
+            cover_temp_location = f'{album_path}cover.{album_info.cover_type.name}'
 
             # Download booklet, animated album cover and album cover if present
             self._download_album_files(album_path, album_info)
@@ -350,7 +391,7 @@ class Downloader:
 
         if self.download_mode is DownloadTypeEnum.track and not self.global_settings['formatting']['force_album_format']:  # Python 3.10 can't become popular sooner, ugh
             track_location_name = self.path + self.global_settings['formatting']['single_full_path_format'].format(**track_tags)
-        elif track_info.tags.total_tracks == 1 and not self.global_settings['formatting']['force_album_format']:
+        elif (track_info.tags.total_tracks == 1 or self.download_mode is DownloadTypeEnum.playlist) and not self.global_settings['formatting']['force_album_format']:
             track_location_name = album_location + self.global_settings['formatting']['single_full_path_format'].format(**track_tags)
         else:
             if track_info.tags.total_discs and track_info.tags.total_discs > 1: album_location += f'CD {track_info.tags.disc_number!s}/'
@@ -475,6 +516,7 @@ class Downloader:
 
                 if lyrics_module_name != self.service_name:
                     results: list[SearchResult] = self.search_by_tags(lyrics_module_name, track_info)
+                    #print(results)
                     lyrics_track_id = results[0].result_id if len(results) else None
                     extra_kwargs = results[0].extra_kwargs if len(results) else None
                 else:
@@ -541,7 +583,7 @@ class Downloader:
         
         # Do conversions
         old_track_location, old_container = None, None
-        if codec in conversions:
+        if codec in conversions and track_info.sample_rate != 44.1:
             old_codec_data = codec_data[codec]
             new_codec = conversions[codec]
             new_codec_data = codec_data[new_codec]
@@ -576,6 +618,7 @@ class Downloader:
                     stream.output(
                         temp_track_location,
                         acodec=new_codec.name.lower(),
+                        ar=44100,
                         **conv_flags,
                         loglevel='error'
                     ).run(capture_stdout=True, capture_stderr=True)
@@ -622,6 +665,7 @@ class Downloader:
         # Finally tag file
         self.print('Tagging file')
         try:
+            #print(Image.open(cover_temp_location).size)
             tag_file(track_location, cover_temp_location if self.global_settings['covers']['embed_cover'] else None,
                      track_info, credits_list, embedded_lyrics, container)
             if old_track_location:

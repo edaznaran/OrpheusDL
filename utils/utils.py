@@ -22,20 +22,19 @@ def create_requests_session():
 sanitise_name = lambda name : re.sub(r'[:]', ' - ', re.sub(r'[\\/*?"<>|$]', '', re.sub(r'[ \t]+$', '', str(name).rstrip()))) if name else ''
 
 
-def fix_byte_limit(path: str, byte_limit=250):
+def fix_file_limit(path: str, file_limit=308):
+    #print(len(path))
     # only needs the relative path, the abspath uses already existing folders
     rel_path = os.path.relpath(path).replace('\\', '/')
-
-    # split path into directory and filename
-    directory, filename = os.path.split(rel_path)
-
-    # truncate filename if its byte size exceeds the byte_limit
-    filename_bytes = filename.encode('utf-8')
-    fixed_bytes = filename_bytes[:byte_limit]
-    fixed_filename = fixed_bytes.decode('utf-8', 'ignore')
-
-    # join the directory and truncated filename together
-    return directory + '/' + fixed_filename
+    # iterate over all folders and file and check for a file_limit violation
+    split_path = []
+    for folder in rel_path.split('/'):
+    	split_path.append(folder[:file_limit] if len(folder) > file_limit else folder)
+    	file_limit=file_limit-len(folder)-1
+    #split_path = [folder[:file_limit] if len(folder) > file_limit else folder for folder in rel_path.split('/')]
+    #print(split_path)
+    # join the split_path together
+    return '/'.join(split_path)
 
 
 r_session = create_requests_session()
@@ -80,8 +79,10 @@ def download_file(url, file_location, headers={}, enable_progress_bar=False, ind
                 new_compression = 70
             if new_format == 'png': new_compression = None
             with Image.open(file_location) as im:
-                im = im.resize((new_resolution, new_resolution), Image.Resampling.BICUBIC)
-                im.save(file_location, new_format, quality=new_compression)
+                width,height=im.size
+                if width>new_resolution or height>new_resolution:
+                    im = im.resize((new_resolution if width>=height else int(new_resolution*width/height), new_resolution if height>=width else int(new_resolution*height/width)), Image.Resampling.BICUBIC)
+                    im.save(file_location, new_format, quality=new_compression)
     except KeyboardInterrupt:
         if os.path.isfile(file_location):
             print(f'\tDeleting partially downloaded file "{str(file_location)}"')
